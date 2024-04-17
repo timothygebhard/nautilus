@@ -11,6 +11,7 @@ from multiprocessing import Pool
 from pathlib import Path
 from scipy.special import logsumexp
 from shutil import get_terminal_size
+from time import time
 from threadpoolctl import threadpool_limits
 from warnings import warn
 
@@ -367,8 +368,16 @@ class Sampler():
                     self.bounds.append(NautilusBound.read(
                         fstream['bound_{}'.format(i)], rng=self.rng))
 
-    def run(self, f_live=0.01, n_shell=1, n_eff=10000, n_like_max=np.inf,
-            discard_exploration=False, verbose=False):
+    def run(
+        self,
+        f_live: float = 0.01,
+        n_shell: int = 1,
+        n_eff: int = 10_000,
+        n_like_max: float = np.inf,
+        discard_exploration: bool = False,
+        max_runtime: float = np.inf,
+        verbose=False,
+    ) -> bool:
         """Run the sampler until convergence.
 
         Parameters
@@ -390,11 +399,22 @@ class Sampler():
             Whether to discard points drawn in the exploration phase. This is
             required for a fully unbiased posterior and evidence estimate.
             Default is False.
+        max_runtime : float, optional
+            Maximum runtime in seconds. Default is infinity.
         verbose : bool, optional
             If True, print information about sampler progress. Default is
             False.
 
+        Returns
+        -------
+        finished : bool
+            True if the sampler finished successfully, False if we stopped
+            early because we reached the `max_runtime`.
         """
+
+        # Store start time of the run() command
+        run_start = time()
+
         if verbose:
             print('Starting the nautilus sampler...')
             print('Please report issues at github.com/johannesulf/nautilus.')
@@ -418,6 +438,11 @@ class Sampler():
                     if self.filepath is not None:
                         self.write(self.filepath, overwrite=True)
 
+                    # Check if we have reached the maximum runtime
+                    if time() - run_start > max_runtime:
+                        self.print_status("Reached maximum runtime!")
+                        return False
+
                 self.n_update_iter += self.add_samples(-1, verbose=verbose)
                 self.n_like_iter += self.n_batch
                 if self.filepath is not None:
@@ -425,6 +450,11 @@ class Sampler():
                     if self.n_like == self.n_batch:
                         self.write(self.filepath, overwrite=True)
                     self.write_shell_update(self.filepath, -1)
+
+                    # Check if we have reached the maximum runtime
+                    if time() - run_start > max_runtime:
+                        self.print_status("Reached maximum runtime!")
+                        return False
 
                 if self.f_live <= f_live:
 
@@ -453,11 +483,21 @@ class Sampler():
                     if self.filepath is not None:
                         self.write(self.filepath, overwrite=True)
 
+                    # Check if we have reached the maximum runtime
+                    if time() - run_start > max_runtime:
+                        self.print_status("Reached maximum runtime!")
+                        return False
+
             elif np.any(self.shell_n < n_shell):
                 shell = np.flatnonzero(self.shell_n < n_shell)[0]
                 self.add_samples(shell, verbose=verbose)
                 if self.filepath is not None:
                     self.write_shell_update(self.filepath, shell)
+
+                # Check if we have reached the maximum runtime
+                if time() - run_start > max_runtime:
+                    self.print_status("Reached maximum runtime!")
+                    return False
 
             elif self.n_eff < n_eff:
                 shell = np.argmax(self.shell_log_l + self.shell_log_v -
@@ -467,11 +507,20 @@ class Sampler():
                 if self.filepath is not None:
                     self.write_shell_update(self.filepath, shell)
 
+                # Check if we have reached the maximum runtime
+                if time() - run_start > max_runtime:
+                    self.print_status("Reached maximum runtime!")
+                    return False
+
             else:
                 break
 
         if verbose:
             self.print_status('Finished')
+
+        # If we got here, we have actually finished and not just exceeded the
+        # maximum runtime
+        return True
 
     @property
     def discard_exploration(self):
